@@ -54,10 +54,15 @@ TEST_CASES = [
 
 def load_model(model_path):
     """Load model and tokenizer from path."""
+    # Convert to absolute path for local files
+    model_path = os.path.abspath(model_path)
     print(f"Loading model from: {model_path}")
     
-    tokenizer = AutoTokenizer.from_pretrained(model_path)
-    model = AutoModelForSequenceClassification.from_pretrained(model_path)
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"Model path does not exist: {model_path}")
+    
+    tokenizer = AutoTokenizer.from_pretrained(model_path, local_files_only=True)
+    model = AutoModelForSequenceClassification.from_pretrained(model_path, local_files_only=True)
     
     # Load label mapping
     label_map_path = os.path.join(model_path, "label_mapping.json")
