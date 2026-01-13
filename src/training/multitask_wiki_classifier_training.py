@@ -21,6 +21,100 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+# --- TYPO AUGMENTATION FOR ROBUSTNESS (Issue #967) ---
+# Keyboard layout for adjacent key substitution
+KEYBOARD_ADJACENT = {
+    'a': 'sqwz', 'b': 'vghn', 'c': 'xdfv', 'd': 'serfcx', 'e': 'wrsdf',
+    'f': 'drtgvc', 'g': 'ftyhbv', 'h': 'gyujnb', 'i': 'ujklo', 'j': 'huikmn',
+    'k': 'jiolm', 'l': 'kop', 'm': 'njk', 'n': 'bhjm', 'o': 'iklp',
+    'p': 'ol', 'q': 'wa', 'r': 'edft', 's': 'awedxz', 't': 'rfgy',
+    'u': 'yhji', 'v': 'cfgb', 'w': 'qase', 'x': 'zsdc', 'y': 'tghu',
+    'z': 'asx'
+}
+
+
+def apply_typo_augmentation(text, augmentation_prob=0.15):
+    """
+    Apply various typo augmentations to text to make models robust to misspellings.
+    
+    Args:
+        text: Input text to augment
+        augmentation_prob: Probability of augmenting each word (default 15%)
+    
+    Returns:
+        Augmented text with realistic typos
+    """
+    if not text or len(text) < 3:
+        return text
+    
+    words = text.split()
+    augmented_words = []
+    
+    for word in words:
+        # Skip short words and punctuation
+        if len(word) < 3 or not word.isalpha():
+            augmented_words.append(word)
+            continue
+            
+        # Apply augmentation with probability
+        if random.random() < augmentation_prob:
+            aug_type = random.choice([
+                'swap_chars',      # "the" -> "teh"
+                'delete_char',     # "please" -> "plese"
+                'insert_char',     # "solve" -> "slove"
+                'substitute_char', # "problem" -> "prblem"
+                'keyboard_typo',   # adjacent key substitution
+            ])
+            word = _apply_single_augmentation(word, aug_type)
+        
+        augmented_words.append(word)
+    
+    return ' '.join(augmented_words)
+
+
+def _apply_single_augmentation(word, aug_type):
+    """Apply a single type of augmentation to a word."""
+    if len(word) < 3:
+        return word
+    
+    word_list = list(word)
+    
+    if aug_type == 'swap_chars':
+        # Swap two adjacent characters
+        idx = random.randint(0, len(word_list) - 2)
+        word_list[idx], word_list[idx + 1] = word_list[idx + 1], word_list[idx]
+        
+    elif aug_type == 'delete_char':
+        # Delete a random character (not first or last)
+        if len(word_list) > 3:
+            idx = random.randint(1, len(word_list) - 2)
+            word_list.pop(idx)
+            
+    elif aug_type == 'insert_char':
+        # Insert a random duplicate character
+        idx = random.randint(0, len(word_list) - 1)
+        word_list.insert(idx, word_list[idx])
+        
+    elif aug_type == 'substitute_char':
+        # Substitute with a random vowel or consonant
+        idx = random.randint(1, len(word_list) - 2)
+        char = word_list[idx].lower()
+        if char in 'aeiou':
+            word_list[idx] = random.choice('aeiou')
+        else:
+            word_list[idx] = random.choice('bcdfghjklmnpqrstvwxyz')
+            
+    elif aug_type == 'keyboard_typo':
+        # Substitute with adjacent keyboard key
+        idx = random.randint(0, len(word_list) - 1)
+        char = word_list[idx].lower()
+        if char in KEYBOARD_ADJACENT:
+            adjacent = KEYBOARD_ADJACENT[char]
+            word_list[idx] = random.choice(adjacent)
+    
+    return ''.join(word_list)
+
+
 # --- CONFIGURATION (Remains the same) ---
 HIGH_LEVEL_CATEGORIES = [
     "Science",
@@ -114,16 +208,33 @@ class MultitaskBertModel(nn.Module):
 
 
 class MultitaskDataset(Dataset):
-    def __init__(self, samples, tokenizer, max_length=512):
+    def __init__(self, samples, tokenizer, max_length=512, augment_typos=False, augment_prob=0.15):
+        """
+        Multitask dataset with optional typo augmentation.
+        
+        Args:
+            samples: List of (text, task_name, label) tuples
+            tokenizer: Tokenizer for encoding text
+            max_length: Maximum sequence length
+            augment_typos: Whether to apply typo augmentation (for robustness training)
+            augment_prob: Probability of augmenting each word
+        """
         self.samples = samples
         self.tokenizer = tokenizer
         self.max_length = max_length
+        self.augment_typos = augment_typos
+        self.augment_prob = augment_prob
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx):
         text, task_name, label = self.samples[idx]
+        
+        # Apply typo augmentation if enabled (only during training)
+        if self.augment_typos:
+            text = apply_typo_augmentation(text, self.augment_prob)
+        
         encoding = self.tokenizer(
             text,
             truncation=True,
@@ -396,13 +507,23 @@ class MultitaskTrainer:
         resume=False,
         save_steps=500,
         checkpoint_to_load=None,
+        augment_typos=False,
+        augment_prob=0.15,
     ):
-        train_dataset = MultitaskDataset(train_samples, self.tokenizer)
+        # Apply typo augmentation only to training data (not validation)
+        train_dataset = MultitaskDataset(
+            train_samples, self.tokenizer,
+            augment_typos=augment_typos,
+            augment_prob=augment_prob
+        )
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-        val_dataset = MultitaskDataset(val_samples, self.tokenizer)
+        val_dataset = MultitaskDataset(val_samples, self.tokenizer)  # No augmentation for validation
         val_loader = (
             DataLoader(val_dataset, batch_size=batch_size) if val_samples else None
         )
+        
+        if augment_typos:
+            logger.info(f"Typo augmentation ENABLED with probability {augment_prob}")
 
         optimizer = torch.optim.AdamW(self.model.parameters(), lr=learning_rate)
         total_steps = len(train_loader) * num_epochs
@@ -505,9 +626,21 @@ class MultitaskTrainer:
 
     def save_model(self, output_path):
         os.makedirs(output_path, exist_ok=True)
+        
+        # Save in both formats for compatibility
+        # 1. PyTorch format (legacy)
         torch.save(
             self.model.state_dict(), os.path.join(output_path, "pytorch_model.bin")
         )
+        
+        # 2. SafeTensors format (modern, used by deployed models)
+        try:
+            from safetensors.torch import save_file
+            save_file(self.model.state_dict(), os.path.join(output_path, "model.safetensors"))
+            logger.info("Saved model in safetensors format")
+        except ImportError:
+            logger.warning("safetensors not installed, skipping safetensors format. Install with: pip install safetensors")
+        
         self.tokenizer.save_pretrained(output_path)
         with open(os.path.join(output_path, "task_configs.json"), "w") as f:
             json.dump(self.task_configs, f, indent=2)
@@ -535,6 +668,17 @@ def main():
     )
     parser.add_argument(
         "--save-steps", type=int, default=500, help="Save a checkpoint every N steps."
+    )
+    parser.add_argument(
+        "--augment-typos",
+        action="store_true",
+        help="Enable typo augmentation for robustness training (Issue #967)."
+    )
+    parser.add_argument(
+        "--augment-prob",
+        type=float,
+        default=0.15,
+        help="Probability of augmenting each word with typos (default: 0.15)."
     )
     args = parser.parse_args()
 
@@ -650,6 +794,8 @@ def main():
         resume=args.resume,
         save_steps=args.save_steps,
         checkpoint_to_load=checkpoint_to_load,
+        augment_typos=args.augment_typos,
+        augment_prob=args.augment_prob,
     )
 
     trainer.save_model(output_path)

@@ -64,6 +64,123 @@ from transformers import __version__ as transformers_version
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+import random
+
+# --- TYPO AUGMENTATION FOR ROBUSTNESS (Issue #967) ---
+# Keyboard layout for adjacent key substitution
+KEYBOARD_ADJACENT = {
+    'a': 'sqwz', 'b': 'vghn', 'c': 'xdfv', 'd': 'serfcx', 'e': 'wrsdf',
+    'f': 'drtgvc', 'g': 'ftyhbv', 'h': 'gyujnb', 'i': 'ujklo', 'j': 'huikmn',
+    'k': 'jiolm', 'l': 'kop', 'm': 'njk', 'n': 'bhjm', 'o': 'iklp',
+    'p': 'ol', 'q': 'wa', 'r': 'edft', 's': 'awedxz', 't': 'rfgy',
+    'u': 'yhji', 'v': 'cfgb', 'w': 'qase', 'x': 'zsdc', 'y': 'tghu',
+    'z': 'asx'
+}
+
+
+def apply_typo_augmentation(text, augmentation_prob=0.15):
+    """
+    Apply various typo augmentations to text to make models robust to misspellings.
+    
+    Args:
+        text: Input text to augment
+        augmentation_prob: Probability of augmenting each word (default 15%)
+    
+    Returns:
+        Augmented text with realistic typos
+    """
+    if not text or len(text) < 3:
+        return text
+    
+    words = text.split()
+    augmented_words = []
+    
+    for word in words:
+        # Skip short words and punctuation
+        if len(word) < 3 or not word.isalpha():
+            augmented_words.append(word)
+            continue
+            
+        # Apply augmentation with probability
+        if random.random() < augmentation_prob:
+            aug_type = random.choice([
+                'swap_chars',      # "the" -> "teh"
+                'delete_char',     # "please" -> "plese"
+                'insert_char',     # "solve" -> "slove"
+                'substitute_char', # "problem" -> "prblem"
+                'keyboard_typo',   # adjacent key substitution
+            ])
+            word = _apply_single_augmentation(word, aug_type)
+        
+        augmented_words.append(word)
+    
+    return ' '.join(augmented_words)
+
+
+def _apply_single_augmentation(word, aug_type):
+    """Apply a single type of augmentation to a word."""
+    if len(word) < 3:
+        return word
+    
+    word_list = list(word)
+    
+    if aug_type == 'swap_chars':
+        idx = random.randint(0, len(word_list) - 2)
+        word_list[idx], word_list[idx + 1] = word_list[idx + 1], word_list[idx]
+        
+    elif aug_type == 'delete_char':
+        if len(word_list) > 3:
+            idx = random.randint(1, len(word_list) - 2)
+            word_list.pop(idx)
+            
+    elif aug_type == 'insert_char':
+        idx = random.randint(0, len(word_list) - 1)
+        word_list.insert(idx, word_list[idx])
+        
+    elif aug_type == 'substitute_char':
+        idx = random.randint(1, len(word_list) - 2)
+        char = word_list[idx].lower()
+        if char in 'aeiou':
+            word_list[idx] = random.choice('aeiou')
+        else:
+            word_list[idx] = random.choice('bcdfghjklmnpqrstvwxyz')
+            
+    elif aug_type == 'keyboard_typo':
+        idx = random.randint(0, len(word_list) - 1)
+        char = word_list[idx].lower()
+        if char in KEYBOARD_ADJACENT:
+            word_list[idx] = random.choice(KEYBOARD_ADJACENT[char])
+    
+    return ''.join(word_list)
+
+
+def augment_dataset(texts, labels, augmentation_prob=0.15, augment_ratio=0.5):
+    """
+    Augment a dataset by adding typo-injected versions of samples.
+    
+    Args:
+        texts: List of original texts
+        labels: List of corresponding labels
+        augmentation_prob: Probability of augmenting each word
+        augment_ratio: Fraction of dataset to augment (0.5 = add 50% more samples)
+    
+    Returns:
+        Augmented (texts, labels) lists
+    """
+    augmented_texts = list(texts)
+    augmented_labels = list(labels)
+    
+    num_to_augment = int(len(texts) * augment_ratio)
+    indices = random.sample(range(len(texts)), min(num_to_augment, len(texts)))
+    
+    for idx in indices:
+        aug_text = apply_typo_augmentation(texts[idx], augmentation_prob)
+        augmented_texts.append(aug_text)
+        augmented_labels.append(labels[idx])
+    
+    logger.info(f"Augmented dataset: {len(texts)} → {len(augmented_texts)} samples (+{len(augmented_texts) - len(texts)} augmented)")
+    return augmented_texts, augmented_labels
+
 
 # Check transformers version and compatibility
 def check_transformers_compatibility():
@@ -414,13 +531,16 @@ def evaluate_category_classifier(
     return accuracy, class_report, conf_matrix, (predictions, true_labels)
 
 
-def main(model_name="minilm", num_epochs=3, batch_size=8):
+def main(model_name="minilm", num_epochs=3, batch_size=8, augment_typos=False, augment_prob=0.15, augment_ratio=0.5):
     """Main function to demonstrate MMLU-Pro category classification fine-tuning.
 
     Args:
         model_name: Name of the model to use (e.g., 'modernbert-base')
         num_epochs: Number of training epochs
         batch_size: Training and evaluation batch size
+        augment_typos: Whether to apply typo augmentation for robustness (Issue #967)
+        augment_prob: Probability of augmenting each word
+        augment_ratio: Fraction of dataset to duplicate with typos
     """
 
     # Validate model name
@@ -444,6 +564,15 @@ def main(model_name="minilm", num_epochs=3, batch_size=8):
     train_texts, train_categories = datasets["train"]
     val_texts, val_categories = datasets["validation"]
     test_texts, test_categories = datasets["test"]
+
+    # Apply typo augmentation if enabled (Issue #967 - robustness to misspellings)
+    if augment_typos:
+        logger.info(f"Applying typo augmentation (prob={augment_prob}, ratio={augment_ratio})...")
+        train_texts, train_categories = augment_dataset(
+            train_texts, train_categories, 
+            augmentation_prob=augment_prob, 
+            augment_ratio=augment_ratio
+        )
 
     unique_categories = list(dataset_loader.label2id.keys())
     category_to_idx = dataset_loader.label2id
@@ -751,9 +880,33 @@ if __name__ == "__main__":
         default=8,
         help="Training and evaluation batch size (default: 8)",
     )
+    parser.add_argument(
+        "--augment-typos",
+        action="store_true",
+        help="Enable typo augmentation for robustness training (Issue #967)",
+    )
+    parser.add_argument(
+        "--augment-prob",
+        type=float,
+        default=0.15,
+        help="Probability of augmenting each word with typos (default: 0.15)",
+    )
+    parser.add_argument(
+        "--augment-ratio",
+        type=float,
+        default=0.5,
+        help="Fraction of dataset to duplicate with typos (default: 0.5 = 50%% more samples)",
+    )
     args = parser.parse_args()
 
     if args.mode == "train":
-        main(args.model, args.epochs, args.batch_size)
+        main(
+            args.model, 
+            args.epochs, 
+            args.batch_size,
+            augment_typos=args.augment_typos,
+            augment_prob=args.augment_prob,
+            augment_ratio=args.augment_ratio,
+        )
     elif args.mode == "test":
         demo_inference(args.model)
