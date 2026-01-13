@@ -21,124 +21,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-# --- TYPO AUGMENTATION FOR ROBUSTNESS (Issue #967) ---
-# Keyboard layout for adjacent key substitution
-KEYBOARD_ADJACENT = {
-    'a': 'sqwz', 'b': 'vghn', 'c': 'xdfv', 'd': 'serfcx', 'e': 'wrsdf',
-    'f': 'drtgvc', 'g': 'ftyhbv', 'h': 'gyujnb', 'i': 'ujklo', 'j': 'huikmn',
-    'k': 'jiolm', 'l': 'kop', 'm': 'njk', 'n': 'bhjm', 'o': 'iklp',
-    'p': 'ol', 'q': 'wa', 'r': 'edft', 's': 'awedxz', 't': 'rfgy',
-    'u': 'yhji', 'v': 'cfgb', 'w': 'qase', 'x': 'zsdc', 'y': 'tghu',
-    'z': 'asx'
-}
-
-
-def apply_typo_augmentation(text, augmentation_prob=0.15):
-    """
-    Apply various typo augmentations to text to make models robust to misspellings.
-    
-    Args:
-        text: Input text to augment
-        augmentation_prob: Probability of augmenting each word (default 15%)
-    
-    Returns:
-        Augmented text with realistic typos
-    """
-    if not text or len(text) < 3:
-        return text
-    
-    words = text.split()
-    augmented_words = []
-    
-    for word in words:
-        # Skip short words and punctuation
-        if len(word) < 3 or not word.isalpha():
-            augmented_words.append(word)
-            continue
-            
-        # Apply augmentation with probability
-        if random.random() < augmentation_prob:
-            aug_type = random.choice([
-                'swap_chars',      # "the" -> "teh"
-                'delete_char',     # "please" -> "plese"
-                'insert_char',     # "solve" -> "slove"
-                'substitute_char', # "problem" -> "prblem"
-                'keyboard_typo',   # adjacent key substitution
-            ])
-            word = _apply_single_augmentation(word, aug_type)
-        
-        augmented_words.append(word)
-    
-    return ' '.join(augmented_words)
-
-
-def _apply_single_augmentation(word, aug_type):
-    """Apply a single type of augmentation to a word."""
-    if len(word) < 3:
-        return word
-    
-    word_list = list(word)
-    
-    if aug_type == 'swap_chars':
-        # Swap two adjacent characters
-        idx = random.randint(0, len(word_list) - 2)
-        word_list[idx], word_list[idx + 1] = word_list[idx + 1], word_list[idx]
-        
-    elif aug_type == 'delete_char':
-        # Delete a random character (not first or last)
-        if len(word_list) > 3:
-            idx = random.randint(1, len(word_list) - 2)
-            word_list.pop(idx)
-            
-    elif aug_type == 'insert_char':
-        # Insert a random duplicate character
-        idx = random.randint(0, len(word_list) - 1)
-        word_list.insert(idx, word_list[idx])
-        
-    elif aug_type == 'substitute_char':
-        # Substitute with a random vowel or consonant
-        idx = random.randint(1, len(word_list) - 2)
-        char = word_list[idx].lower()
-        if char in 'aeiou':
-            word_list[idx] = random.choice('aeiou')
-        else:
-            word_list[idx] = random.choice('bcdfghjklmnpqrstvwxyz')
-            
-    elif aug_type == 'keyboard_typo':
-        # Substitute with adjacent keyboard key
-        idx = random.randint(0, len(word_list) - 1)
-        char = word_list[idx].lower()
-        if char in KEYBOARD_ADJACENT:
-            adjacent = KEYBOARD_ADJACENT[char]
-            word_list[idx] = random.choice(adjacent)
-    
-    return ''.join(word_list)
-
-
-# --- CONFIGURATION ---
-# Use MMLU-Pro's 14 categories directly (matching deployed mom-domain-classifier)
-# Set USE_MMLU_PRO_CATEGORIES=True for 14 categories, False for 8 high-level
-USE_MMLU_PRO_CATEGORIES = True
-
-# MMLU-Pro's 14 categories (same as deployed mom-domain-classifier)
-MMLU_PRO_CATEGORIES = [
-    "biology",
-    "business",
-    "chemistry",
-    "computer science",
-    "economics",
-    "engineering",
-    "health",
-    "history",
-    "law",
-    "math",
-    "other",
-    "philosophy",
-    "physics",
-    "psychology",
-]
-
-# Legacy 8 high-level categories (for backward compatibility)
+# --- CONFIGURATION (Remains the same) ---
 HIGH_LEVEL_CATEGORIES = [
     "Science",
     "History",
@@ -149,8 +32,6 @@ HIGH_LEVEL_CATEGORIES = [
     "Philosophy",
     "Mathematics",
 ]
-
-# Mapping from MMLU-Pro fine-grained to high-level (used only if USE_MMLU_PRO_CATEGORIES=False)
 MMLU_TO_HIGH_LEVEL = {
     "anatomy": "Science",
     "astronomy": "Science",
@@ -197,46 +78,6 @@ MMLU_TO_HIGH_LEVEL = {
     "high_school_statistics": "Mathematics",
     "professional_accounting": "Mathematics",
 }
-
-# Mapping from MMLU-Pro fine-grained subjects to 14 MMLU-Pro categories
-MMLU_SUBJECT_TO_CATEGORY = {
-    # Biology
-    "anatomy": "biology", "college_biology": "biology", "high_school_biology": "biology",
-    "medical_genetics": "biology", "virology": "biology",
-    # Business
-    "business_ethics": "business", "management": "business", "marketing": "business",
-    # Chemistry
-    "college_chemistry": "chemistry", "high_school_chemistry": "chemistry",
-    # Computer Science
-    "college_computer_science": "computer science", "computer_security": "computer science",
-    "high_school_computer_science": "computer science", "machine_learning": "computer science",
-    # Economics
-    "econometrics": "economics", "high_school_macroeconomics": "economics",
-    "high_school_microeconomics": "economics",
-    # Engineering
-    "electrical_engineering": "engineering",
-    # Health
-    "anatomy": "health", "clinical_knowledge": "health", "college_medicine": "health",
-    "human_aging": "health", "human_sexuality": "health", "nutrition": "health",
-    "professional_medicine": "health",
-    # History
-    "high_school_european_history": "history", "high_school_us_history": "history",
-    "high_school_world_history": "history", "prehistory": "history",
-    # Law
-    "international_law": "law", "jurisprudence": "law", "professional_law": "law",
-    # Math
-    "abstract_algebra": "math", "college_mathematics": "math", "elementary_mathematics": "math",
-    "high_school_mathematics": "math", "high_school_statistics": "math",
-    # Philosophy
-    "formal_logic": "philosophy", "logical_fallacies": "philosophy", "moral_disputes": "philosophy",
-    "moral_scenarios": "philosophy", "philosophy": "philosophy", "world_religions": "philosophy",
-    # Physics
-    "astronomy": "physics", "college_physics": "physics", "conceptual_physics": "physics",
-    "high_school_physics": "physics",
-    # Psychology
-    "high_school_psychology": "psychology", "professional_psychology": "psychology",
-    "sociology": "psychology",
-}
 WIKI_DATA_DIR = "wikipedia_data"
 ARTICLES_PER_CATEGORY = 1000
 
@@ -273,33 +114,16 @@ class MultitaskBertModel(nn.Module):
 
 
 class MultitaskDataset(Dataset):
-    def __init__(self, samples, tokenizer, max_length=512, augment_typos=False, augment_prob=0.15):
-        """
-        Multitask dataset with optional typo augmentation.
-        
-        Args:
-            samples: List of (text, task_name, label) tuples
-            tokenizer: Tokenizer for encoding text
-            max_length: Maximum sequence length
-            augment_typos: Whether to apply typo augmentation (for robustness training)
-            augment_prob: Probability of augmenting each word
-        """
+    def __init__(self, samples, tokenizer, max_length=512):
         self.samples = samples
         self.tokenizer = tokenizer
         self.max_length = max_length
-        self.augment_typos = augment_typos
-        self.augment_prob = augment_prob
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx):
         text, task_name, label = self.samples[idx]
-        
-        # Apply typo augmentation if enabled (only during training)
-        if self.augment_typos:
-            text = apply_typo_augmentation(text, self.augment_prob)
-        
         encoding = self.tokenizer(
             text,
             truncation=True,
@@ -424,19 +248,7 @@ class MultitaskTrainer:
         all_samples = []
         datasets = {}
         logger.info("Preparing combined dataset for category classification...")
-        
-        # Choose category set based on configuration
-        if USE_MMLU_PRO_CATEGORIES:
-            # Use 14 MMLU-Pro categories (matches deployed mom-domain-classifier)
-            category_list = MMLU_PRO_CATEGORIES
-            logger.info("Using 14 MMLU-Pro categories (matching deployed model)")
-        else:
-            # Use 8 high-level categories (legacy)
-            category_list = HIGH_LEVEL_CATEGORIES
-            logger.info("Using 8 high-level categories")
-        
-        category_to_idx = {cat: idx for idx, cat in enumerate(category_list)}
-        
+        category_to_idx = {cat: idx for idx, cat in enumerate(HIGH_LEVEL_CATEGORIES)}
         try:
             mmlu_dataset = load_dataset("TIGER-Lab/MMLU-Pro")
             questions, categories = (
@@ -444,56 +256,23 @@ class MultitaskTrainer:
                 mmlu_dataset["test"]["category"],
             )
             mapped_count = 0
-            skipped_count = 0
-            
             for question, category in zip(questions, categories):
-                if USE_MMLU_PRO_CATEGORIES:
-                    # Use MMLU-Pro category directly if it's in our list
-                    if category in category_to_idx:
-                        all_samples.append(
-                            (question, "category", category_to_idx[category])
-                        )
-                        mapped_count += 1
-                    # Try mapping from subject to category
-                    elif category in MMLU_SUBJECT_TO_CATEGORY:
-                        mapped_cat = MMLU_SUBJECT_TO_CATEGORY[category]
-                        if mapped_cat in category_to_idx:
-                            all_samples.append(
-                                (question, "category", category_to_idx[mapped_cat])
-                            )
-                            mapped_count += 1
-                        else:
-                            skipped_count += 1
-                    else:
-                        skipped_count += 1
-                else:
-                    # Legacy: map to high-level categories
-                    if category in MMLU_TO_HIGH_LEVEL:
-                        high_level_cat = MMLU_TO_HIGH_LEVEL[category]
-                        all_samples.append(
-                            (question, "category", category_to_idx[high_level_cat])
-                        )
-                        mapped_count += 1
-                    else:
-                        skipped_count += 1
-                        
+                if category in MMLU_TO_HIGH_LEVEL:
+                    high_level_cat = MMLU_TO_HIGH_LEVEL[category]
+                    all_samples.append(
+                        (question, "category", category_to_idx[high_level_cat])
+                    )
+                    mapped_count += 1
             logger.info(
-                f"Added {mapped_count} samples from MMLU-Pro to category task (skipped {skipped_count})."
+                f"Added {mapped_count} mapped samples from MMLU-Pro to category task."
             )
         except Exception as e:
             logger.warning(f"Failed to load MMLU-Pro: {e}")
-        
-        # Only load Wikipedia samples if not using MMLU-Pro categories
-        # (Wikipedia data is organized by high-level categories)
-        if not USE_MMLU_PRO_CATEGORIES:
-            wiki_samples = self._load_wikipedia_samples(WIKI_DATA_DIR, category_to_idx)
-            all_samples.extend(wiki_samples)
-            logger.info(
-                f"Added {len(wiki_samples)} samples from Wikipedia to category task."
-            )
-        else:
-            logger.info("Skipping Wikipedia data (not compatible with MMLU-Pro categories)")
-        
+        wiki_samples = self._load_wikipedia_samples(WIKI_DATA_DIR, category_to_idx)
+        all_samples.extend(wiki_samples)
+        logger.info(
+            f"Added {len(wiki_samples)} samples from Wikipedia to category task."
+        )
         datasets["category"] = {
             "label_mapping": {
                 "label_to_idx": category_to_idx,
@@ -617,23 +396,13 @@ class MultitaskTrainer:
         resume=False,
         save_steps=500,
         checkpoint_to_load=None,
-        augment_typos=False,
-        augment_prob=0.15,
     ):
-        # Apply typo augmentation only to training data (not validation)
-        train_dataset = MultitaskDataset(
-            train_samples, self.tokenizer,
-            augment_typos=augment_typos,
-            augment_prob=augment_prob
-        )
+        train_dataset = MultitaskDataset(train_samples, self.tokenizer)
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-        val_dataset = MultitaskDataset(val_samples, self.tokenizer)  # No augmentation for validation
+        val_dataset = MultitaskDataset(val_samples, self.tokenizer)
         val_loader = (
             DataLoader(val_dataset, batch_size=batch_size) if val_samples else None
         )
-        
-        if augment_typos:
-            logger.info(f"Typo augmentation ENABLED with probability {augment_prob}")
 
         optimizer = torch.optim.AdamW(self.model.parameters(), lr=learning_rate)
         total_steps = len(train_loader) * num_epochs
@@ -736,21 +505,9 @@ class MultitaskTrainer:
 
     def save_model(self, output_path):
         os.makedirs(output_path, exist_ok=True)
-        
-        # Save in both formats for compatibility
-        # 1. PyTorch format (legacy)
         torch.save(
             self.model.state_dict(), os.path.join(output_path, "pytorch_model.bin")
         )
-        
-        # 2. SafeTensors format (modern, used by deployed models)
-        try:
-            from safetensors.torch import save_file
-            save_file(self.model.state_dict(), os.path.join(output_path, "model.safetensors"))
-            logger.info("Saved model in safetensors format")
-        except ImportError:
-            logger.warning("safetensors not installed, skipping safetensors format. Install with: pip install safetensors")
-        
         self.tokenizer.save_pretrained(output_path)
         with open(os.path.join(output_path, "task_configs.json"), "w") as f:
             json.dump(self.task_configs, f, indent=2)
@@ -778,17 +535,6 @@ def main():
     )
     parser.add_argument(
         "--save-steps", type=int, default=500, help="Save a checkpoint every N steps."
-    )
-    parser.add_argument(
-        "--augment-typos",
-        action="store_true",
-        help="Enable typo augmentation for robustness training (Issue #967)."
-    )
-    parser.add_argument(
-        "--augment-prob",
-        type=float,
-        default=0.15,
-        help="Probability of augmenting each word with typos (default: 0.15)."
     )
     args = parser.parse_args()
 
@@ -904,8 +650,6 @@ def main():
         resume=args.resume,
         save_steps=args.save_steps,
         checkpoint_to_load=checkpoint_to_load,
-        augment_typos=args.augment_typos,
-        augment_prob=args.augment_prob,
     )
 
     trainer.save_model(output_path)
