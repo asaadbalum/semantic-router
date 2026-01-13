@@ -115,7 +115,30 @@ def _apply_single_augmentation(word, aug_type):
     return ''.join(word_list)
 
 
-# --- CONFIGURATION (Remains the same) ---
+# --- CONFIGURATION ---
+# Use MMLU-Pro's 14 categories directly (matching deployed mom-domain-classifier)
+# Set USE_MMLU_PRO_CATEGORIES=True for 14 categories, False for 8 high-level
+USE_MMLU_PRO_CATEGORIES = True
+
+# MMLU-Pro's 14 categories (same as deployed mom-domain-classifier)
+MMLU_PRO_CATEGORIES = [
+    "biology",
+    "business",
+    "chemistry",
+    "computer science",
+    "economics",
+    "engineering",
+    "health",
+    "history",
+    "law",
+    "math",
+    "other",
+    "philosophy",
+    "physics",
+    "psychology",
+]
+
+# Legacy 8 high-level categories (for backward compatibility)
 HIGH_LEVEL_CATEGORIES = [
     "Science",
     "History",
@@ -126,6 +149,8 @@ HIGH_LEVEL_CATEGORIES = [
     "Philosophy",
     "Mathematics",
 ]
+
+# Mapping from MMLU-Pro fine-grained to high-level (used only if USE_MMLU_PRO_CATEGORIES=False)
 MMLU_TO_HIGH_LEVEL = {
     "anatomy": "Science",
     "astronomy": "Science",
@@ -171,6 +196,46 @@ MMLU_TO_HIGH_LEVEL = {
     "high_school_mathematics": "Mathematics",
     "high_school_statistics": "Mathematics",
     "professional_accounting": "Mathematics",
+}
+
+# Mapping from MMLU-Pro fine-grained subjects to 14 MMLU-Pro categories
+MMLU_SUBJECT_TO_CATEGORY = {
+    # Biology
+    "anatomy": "biology", "college_biology": "biology", "high_school_biology": "biology",
+    "medical_genetics": "biology", "virology": "biology",
+    # Business
+    "business_ethics": "business", "management": "business", "marketing": "business",
+    # Chemistry
+    "college_chemistry": "chemistry", "high_school_chemistry": "chemistry",
+    # Computer Science
+    "college_computer_science": "computer science", "computer_security": "computer science",
+    "high_school_computer_science": "computer science", "machine_learning": "computer science",
+    # Economics
+    "econometrics": "economics", "high_school_macroeconomics": "economics",
+    "high_school_microeconomics": "economics",
+    # Engineering
+    "electrical_engineering": "engineering",
+    # Health
+    "anatomy": "health", "clinical_knowledge": "health", "college_medicine": "health",
+    "human_aging": "health", "human_sexuality": "health", "nutrition": "health",
+    "professional_medicine": "health",
+    # History
+    "high_school_european_history": "history", "high_school_us_history": "history",
+    "high_school_world_history": "history", "prehistory": "history",
+    # Law
+    "international_law": "law", "jurisprudence": "law", "professional_law": "law",
+    # Math
+    "abstract_algebra": "math", "college_mathematics": "math", "elementary_mathematics": "math",
+    "high_school_mathematics": "math", "high_school_statistics": "math",
+    # Philosophy
+    "formal_logic": "philosophy", "logical_fallacies": "philosophy", "moral_disputes": "philosophy",
+    "moral_scenarios": "philosophy", "philosophy": "philosophy", "world_religions": "philosophy",
+    # Physics
+    "astronomy": "physics", "college_physics": "physics", "conceptual_physics": "physics",
+    "high_school_physics": "physics",
+    # Psychology
+    "high_school_psychology": "psychology", "professional_psychology": "psychology",
+    "sociology": "psychology",
 }
 WIKI_DATA_DIR = "wikipedia_data"
 ARTICLES_PER_CATEGORY = 1000
@@ -359,7 +424,19 @@ class MultitaskTrainer:
         all_samples = []
         datasets = {}
         logger.info("Preparing combined dataset for category classification...")
-        category_to_idx = {cat: idx for idx, cat in enumerate(HIGH_LEVEL_CATEGORIES)}
+        
+        # Choose category set based on configuration
+        if USE_MMLU_PRO_CATEGORIES:
+            # Use 14 MMLU-Pro categories (matches deployed mom-domain-classifier)
+            category_list = MMLU_PRO_CATEGORIES
+            logger.info("Using 14 MMLU-Pro categories (matching deployed model)")
+        else:
+            # Use 8 high-level categories (legacy)
+            category_list = HIGH_LEVEL_CATEGORIES
+            logger.info("Using 8 high-level categories")
+        
+        category_to_idx = {cat: idx for idx, cat in enumerate(category_list)}
+        
         try:
             mmlu_dataset = load_dataset("TIGER-Lab/MMLU-Pro")
             questions, categories = (
@@ -367,23 +444,56 @@ class MultitaskTrainer:
                 mmlu_dataset["test"]["category"],
             )
             mapped_count = 0
+            skipped_count = 0
+            
             for question, category in zip(questions, categories):
-                if category in MMLU_TO_HIGH_LEVEL:
-                    high_level_cat = MMLU_TO_HIGH_LEVEL[category]
-                    all_samples.append(
-                        (question, "category", category_to_idx[high_level_cat])
-                    )
-                    mapped_count += 1
+                if USE_MMLU_PRO_CATEGORIES:
+                    # Use MMLU-Pro category directly if it's in our list
+                    if category in category_to_idx:
+                        all_samples.append(
+                            (question, "category", category_to_idx[category])
+                        )
+                        mapped_count += 1
+                    # Try mapping from subject to category
+                    elif category in MMLU_SUBJECT_TO_CATEGORY:
+                        mapped_cat = MMLU_SUBJECT_TO_CATEGORY[category]
+                        if mapped_cat in category_to_idx:
+                            all_samples.append(
+                                (question, "category", category_to_idx[mapped_cat])
+                            )
+                            mapped_count += 1
+                        else:
+                            skipped_count += 1
+                    else:
+                        skipped_count += 1
+                else:
+                    # Legacy: map to high-level categories
+                    if category in MMLU_TO_HIGH_LEVEL:
+                        high_level_cat = MMLU_TO_HIGH_LEVEL[category]
+                        all_samples.append(
+                            (question, "category", category_to_idx[high_level_cat])
+                        )
+                        mapped_count += 1
+                    else:
+                        skipped_count += 1
+                        
             logger.info(
-                f"Added {mapped_count} mapped samples from MMLU-Pro to category task."
+                f"Added {mapped_count} samples from MMLU-Pro to category task (skipped {skipped_count})."
             )
         except Exception as e:
             logger.warning(f"Failed to load MMLU-Pro: {e}")
-        wiki_samples = self._load_wikipedia_samples(WIKI_DATA_DIR, category_to_idx)
-        all_samples.extend(wiki_samples)
-        logger.info(
-            f"Added {len(wiki_samples)} samples from Wikipedia to category task."
-        )
+        
+        # Only load Wikipedia samples if not using MMLU-Pro categories
+        # (Wikipedia data is organized by high-level categories)
+        if not USE_MMLU_PRO_CATEGORIES:
+            wiki_samples = self._load_wikipedia_samples(WIKI_DATA_DIR, category_to_idx)
+            all_samples.extend(wiki_samples)
+            logger.info(
+                f"Added {len(wiki_samples)} samples from Wikipedia to category task."
+            )
+        else:
+            logger.info("Skipping Wikipedia data (not compatible with MMLU-Pro categories)")
+        
         datasets["category"] = {
             "label_mapping": {
                 "label_to_idx": category_to_idx,
