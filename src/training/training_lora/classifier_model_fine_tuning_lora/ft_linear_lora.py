@@ -114,6 +114,114 @@ REQUIRED_CATEGORIES = [
     "psychology",
 ]
 
+import random
+
+# --- TYPO AUGMENTATION FOR ROBUSTNESS (Issue #967) ---
+# Keyboard layout for adjacent key substitution
+KEYBOARD_ADJACENT = {
+    'a': 'sqwz', 'b': 'vghn', 'c': 'xdfv', 'd': 'serfcx', 'e': 'wrsdf',
+    'f': 'drtgvc', 'g': 'ftyhbv', 'h': 'gyujnb', 'i': 'ujklo', 'j': 'huikmn',
+    'k': 'jiolm', 'l': 'kop', 'm': 'njk', 'n': 'bhjm', 'o': 'iklp',
+    'p': 'ol', 'q': 'wa', 'r': 'edft', 's': 'awedxz', 't': 'rfgy',
+    'u': 'yhji', 'v': 'cfgb', 'w': 'qase', 'x': 'zsdc', 'y': 'tghu',
+    'z': 'asx'
+}
+
+
+def apply_typo_augmentation(text, augmentation_prob=0.15):
+    """
+    Apply various typo augmentations to text to make models robust to misspellings.
+    
+    Args:
+        text: Input text to augment
+        augmentation_prob: Probability of augmenting each word (default 15%)
+    
+    Returns:
+        Augmented text with realistic typos
+    """
+    if not text or len(text) < 3:
+        return text
+    
+    words = text.split()
+    augmented_words = []
+    
+    for word in words:
+        if len(word) < 3 or not word.isalpha():
+            augmented_words.append(word)
+            continue
+            
+        if random.random() < augmentation_prob:
+            aug_type = random.choice([
+                'swap_chars', 'delete_char', 'insert_char', 
+                'substitute_char', 'keyboard_typo'
+            ])
+            word = _apply_single_augmentation(word, aug_type)
+        
+        augmented_words.append(word)
+    
+    return ' '.join(augmented_words)
+
+
+def _apply_single_augmentation(word, aug_type):
+    """Apply a single type of augmentation to a word."""
+    if len(word) < 3:
+        return word
+    
+    word_list = list(word)
+    
+    if aug_type == 'swap_chars':
+        idx = random.randint(0, len(word_list) - 2)
+        word_list[idx], word_list[idx + 1] = word_list[idx + 1], word_list[idx]
+    elif aug_type == 'delete_char':
+        if len(word_list) > 3:
+            idx = random.randint(1, len(word_list) - 2)
+            word_list.pop(idx)
+    elif aug_type == 'insert_char':
+        idx = random.randint(0, len(word_list) - 1)
+        word_list.insert(idx, word_list[idx])
+    elif aug_type == 'substitute_char':
+        idx = random.randint(1, len(word_list) - 2)
+        char = word_list[idx].lower()
+        if char in 'aeiou':
+            word_list[idx] = random.choice('aeiou')
+        else:
+            word_list[idx] = random.choice('bcdfghjklmnpqrstvwxyz')
+    elif aug_type == 'keyboard_typo':
+        idx = random.randint(0, len(word_list) - 1)
+        char = word_list[idx].lower()
+        if char in KEYBOARD_ADJACENT:
+            word_list[idx] = random.choice(KEYBOARD_ADJACENT[char])
+    
+    return ''.join(word_list)
+
+
+def augment_dataset(texts, labels, augmentation_prob=0.15, augment_ratio=0.5):
+    """
+    Augment a dataset by adding typo-injected versions of samples.
+    
+    Args:
+        texts: List of original texts
+        labels: List of corresponding labels
+        augmentation_prob: Probability of augmenting each word
+        augment_ratio: Fraction of dataset to augment (0.5 = add 50% more samples)
+    
+    Returns:
+        Augmented (texts, labels) lists
+    """
+    augmented_texts = list(texts)
+    augmented_labels = list(labels)
+    
+    num_to_augment = int(len(texts) * augment_ratio)
+    indices = random.sample(range(len(texts)), min(num_to_augment, len(texts)))
+    
+    for idx in indices:
+        aug_text = apply_typo_augmentation(texts[idx], augmentation_prob)
+        augmented_texts.append(aug_text)
+        augmented_labels.append(labels[idx])
+    
+    logger.info(f"Augmented dataset: {len(texts)} → {len(augmented_texts)} samples (+{len(augmented_texts) - len(texts)} augmented)")
+    return augmented_texts, augmented_labels
+
 
 def create_tokenizer_for_model(model_path: str, base_model_name: str = None):
     """
@@ -446,8 +554,17 @@ def main(
     enable_feature_alignment: bool = False,
     alignment_weight: float = 0.1,
     gpu_id: int = None,
+    augment_typos: bool = False,
+    augment_prob: float = 0.15,
+    augment_ratio: float = 0.5,
 ):
-    """Main training function for LoRA intent classification."""
+    """Main training function for LoRA intent classification.
+    
+    Args:
+        augment_typos: Enable typo augmentation for robustness (Issue #967)
+        augment_prob: Probability of augmenting each word
+        augment_ratio: Fraction of dataset to duplicate with typos
+    """
     logger.info("Starting Enhanced LoRA Intent Classification Training")
 
     # GPU selection and device configuration
@@ -489,6 +606,15 @@ def main(
     # Load real MMLU-Pro dataset
     all_data, category_to_idx, idx_to_category = create_mmlu_dataset(max_samples)
     train_data, val_data = train_test_split(all_data, test_size=0.2, random_state=42)
+    
+    # Apply typo augmentation if enabled (Issue #967 - robustness to misspellings)
+    if augment_typos:
+        logger.info(f"Applying typo augmentation (prob={augment_prob}, ratio={augment_ratio})...")
+        train_texts = [d["text"] for d in train_data]
+        train_labels = [d["label"] for d in train_data]
+        aug_texts, aug_labels = augment_dataset(train_texts, train_labels, augment_prob, augment_ratio)
+        train_data = [{"text": t, "label": l} for t, l in zip(aug_texts, aug_labels)]
+        logger.info(f"Training samples after augmentation: {len(train_data)}")
 
     logger.info(f"Training samples: {len(train_data)}")
     logger.info(f"Validation samples: {len(val_data)}")
@@ -795,6 +921,24 @@ if __name__ == "__main__":
         default=None,
         help="Specific GPU ID to use (0-3 for 4 GPUs). If not specified, automatically selects GPU with most free memory",
     )
+    # Typo augmentation arguments (Issue #967)
+    parser.add_argument(
+        "--augment-typos",
+        action="store_true",
+        help="Enable typo augmentation for robustness training (Issue #967)",
+    )
+    parser.add_argument(
+        "--augment-prob",
+        type=float,
+        default=0.15,
+        help="Probability of augmenting each word with typos (default: 0.15)",
+    )
+    parser.add_argument(
+        "--augment-ratio",
+        type=float,
+        default=0.5,
+        help="Fraction of dataset to duplicate with typos (default: 0.5 = 50%% more samples)",
+    )
 
     args = parser.parse_args()
 
@@ -812,6 +956,9 @@ if __name__ == "__main__":
             alignment_weight=args.alignment_weight,
             output_dir=args.output_dir,
             gpu_id=args.gpu_id,
+            augment_typos=args.augment_typos,
+            augment_prob=args.augment_prob,
+            augment_ratio=args.augment_ratio,
         )
     elif args.mode == "test":
         demo_inference(args.model_path, args.model)
