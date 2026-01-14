@@ -164,23 +164,26 @@ class ConsistencyTrainer(Trainer):
     """
     
     def __init__(self, consistency_weight=1.0, *args, **kwargs):
+        # Remove columns removal to keep our custom keys
+        if 'remove_unused_columns' not in kwargs.get('args', TrainingArguments(output_dir='tmp')).__dict__:
+            pass
         super().__init__(*args, **kwargs)
         self.consistency_weight = consistency_weight
     
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        labels = inputs.pop('labels')
+        labels = inputs.get('labels')
         
         # Forward pass on clean text
         clean_outputs = model(
-            input_ids=inputs['clean_input_ids'],
-            attention_mask=inputs['clean_attention_mask']
+            input_ids=inputs.get('clean_input_ids'),
+            attention_mask=inputs.get('clean_attention_mask')
         )
         clean_logits = clean_outputs.logits
         
         # Forward pass on typo text
         typo_outputs = model(
-            input_ids=inputs['typo_input_ids'],
-            attention_mask=inputs['typo_attention_mask']
+            input_ids=inputs.get('typo_input_ids'),
+            attention_mask=inputs.get('typo_attention_mask')
         )
         typo_logits = typo_outputs.logits
         
@@ -341,6 +344,7 @@ def main(
         lr_scheduler_type="cosine",
         warmup_ratio=0.1,
         bf16=True,  # Use bf16 for L4 GPUs
+        remove_unused_columns=False,  # CRITICAL: Keep our custom columns
     )
     
     # Create trainer
