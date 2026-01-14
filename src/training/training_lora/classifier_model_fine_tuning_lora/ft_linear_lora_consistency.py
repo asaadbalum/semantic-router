@@ -1,17 +1,28 @@
 """
-CONSISTENCY TRAINING for Typo Robustness (Issue #967)
+CONSISTENCY TRAINING for Noise-Robust Classification
 
 This script implements CONSISTENCY LOSS training that forces the model to:
 1. Maintain high accuracy on clean text
-2. Give the SAME prediction for typo versions of the same text
+2. Give the SAME prediction for noisy/augmented versions of the same text
 
 Key Innovation:
-- For each sample, we create a clean version AND a typo version
-- We add a consistency loss that penalizes different predictions
-- This preserves clean accuracy while learning typo robustness
+- For each sample, creates BOTH clean AND augmented (typo) versions
+- Adds consistency loss (KL divergence) that penalizes different predictions
+- Preserves clean accuracy while learning robustness to input noise
+
+Benefits:
+- No accuracy regression on clean text (maintains original capability)
+- Improved robustness to typos, misspellings, and input noise
+- Single training pass (no two-stage training needed)
 
 Usage:
+    # Single GPU
+    python ft_linear_lora_consistency.py --epochs 15 --max-samples 25000
+
+    # Multi-GPU with accelerate
     accelerate launch ft_linear_lora_consistency.py --epochs 15 --max-samples 25000
+
+See also: ft_linear_lora.py for standard training without consistency loss
 """
 
 import json
@@ -58,7 +69,7 @@ REQUIRED_CATEGORIES = [
     "philosophy", "physics", "psychology",
 ]
 
-# Keyboard layout for realistic typos
+# Keyboard layout for realistic typos (QWERTY)
 KEYBOARD_ADJACENT = {
     'a': 'sqwz', 'b': 'vghn', 'c': 'xdfv', 'd': 'serfcx', 'e': 'wrsdf',
     'f': 'drtgvc', 'g': 'ftyhbv', 'h': 'gyujnb', 'i': 'ujklo', 'j': 'huikmn',
@@ -68,9 +79,34 @@ KEYBOARD_ADJACENT = {
     'z': 'asx'
 }
 
+# Common typo patterns (real-world mistakes)
+COMMON_TYPOS = {
+    'the': 'teh', 'and': 'adn', 'that': 'taht', 'with': 'wiht',
+    'this': 'tihs', 'from': 'form', 'have': 'hvae', 'were': 'weer',
+    'their': 'thier', 'there': 'tehre', 'these': 'tehse', 'those': 'thsoe',
+    'what': 'waht', 'when': 'wehn', 'where': 'wehre', 'which': 'whcih',
+    'solve': 'slove', 'problem': 'prblem', 'mathematical': 'mathemtical',
+    'explain': 'expalin', 'describe': 'descrbe', 'calculate': 'calculte',
+    'following': 'follwing', 'structure': 'strcture', 'process': 'procss'
+}
+
+# Vowel substitutions (common mistakes)
+VOWEL_SUBS = {
+    'a': 'eiou', 'e': 'aiou', 'i': 'aeou', 'o': 'aeiu', 'u': 'aeio'
+}
+
+# Common character confusions
+CHAR_CONFUSIONS = {
+    'i': 'l1', 'l': 'i1', 'o': '0', '0': 'o', '1': 'il',
+    's': 'z5', 'z': 's2', 'e': '3', 'a': '4', 'g': '9'
+}
+
 
 def apply_typo(text: str, prob: float = 0.20) -> str:
-    """Apply typos to text with given probability per word."""
+    """
+    Apply realistic typos to text with given probability per word.
+    Enhanced version with more realistic typo patterns.
+    """
     if not text or len(text) < 3:
         return text
     
@@ -78,27 +114,110 @@ def apply_typo(text: str, prob: float = 0.20) -> str:
     result = []
     
     for word in words:
-        if len(word) < 3 or not word.isalpha() or random.random() >= prob:
+        original_word = word
+        word_lower = word.lower()
+        
+        # Skip if too short or not alphabetic
+        if len(word) < 3 or not word.isalpha():
             result.append(word)
             continue
         
-        word_list = list(word)
-        aug_type = random.choice(['swap', 'delete', 'keyboard', 'double'])
+        # Skip with probability
+        if random.random() >= prob:
+            result.append(word)
+            continue
         
-        if aug_type == 'swap' and len(word_list) > 2:
-            idx = random.randint(0, len(word_list) - 2)
-            word_list[idx], word_list[idx + 1] = word_list[idx + 1], word_list[idx]
-        elif aug_type == 'delete' and len(word_list) > 3:
-            idx = random.randint(1, len(word_list) - 2)
-            word_list.pop(idx)
-        elif aug_type == 'keyboard':
-            idx = random.randint(0, len(word_list) - 1)
-            char = word_list[idx].lower()
-            if char in KEYBOARD_ADJACENT:
-                word_list[idx] = random.choice(KEYBOARD_ADJACENT[char])
-        elif aug_type == 'double':
-            idx = random.randint(0, len(word_list) - 1)
-            word_list.insert(idx, word_list[idx])
+        # Check for common typo patterns first (more realistic)
+        if word_lower in COMMON_TYPOS and random.random() < 0.3:
+            # Use common typo pattern
+            typo = COMMON_TYPOS[word_lower]
+            # Preserve capitalization
+            if word[0].isupper():
+                typo = typo.capitalize()
+            result.append(typo)
+            continue
+        
+        word_list = list(word)
+        word_lower_list = [c.lower() for c in word_list]
+        
+        # Decide number of typos (1-2 for longer words)
+        num_typos = 1 if len(word) < 6 else (1 if random.random() < 0.7 else 2)
+        
+        for _ in range(num_typos):
+            if len(word_list) < 3:
+                break
+            
+            # Choose augmentation type with weighted probabilities
+            # More realistic typos are more common
+            aug_weights = [
+                ('keyboard', 0.35),  # Most common - keyboard mistakes
+                ('swap', 0.25),     # Common - transposition
+                ('delete', 0.20),   # Common - missing character
+                ('vowel', 0.10),     # Less common - vowel confusion
+                ('substitute', 0.05), # Less common - character substitution
+                ('double', 0.05)    # Least common - double character
+            ]
+            
+            aug_type = random.choices(
+                [w[0] for w in aug_weights],
+                weights=[w[1] for w in aug_weights]
+            )[0]
+            
+            if aug_type == 'swap' and len(word_list) > 2:
+                # Character swap (common typo)
+                idx = random.randint(0, len(word_list) - 2)
+                word_list[idx], word_list[idx + 1] = word_list[idx + 1], word_list[idx]
+                word_lower_list[idx], word_lower_list[idx + 1] = word_lower_list[idx + 1], word_lower_list[idx]
+                
+            elif aug_type == 'delete' and len(word_list) > 3:
+                # Delete character (common - missing key)
+                idx = random.randint(1, len(word_list) - 2)  # Avoid first/last
+                word_list.pop(idx)
+                word_lower_list.pop(idx)
+                
+            elif aug_type == 'keyboard':
+                # Keyboard adjacent mistake (most realistic)
+                idx = random.randint(0, len(word_list) - 1)
+                char = word_lower_list[idx]
+                if char in KEYBOARD_ADJACENT:
+                    new_char = random.choice(KEYBOARD_ADJACENT[char])
+                    # Preserve case
+                    if word_list[idx].isupper():
+                        new_char = new_char.upper()
+                    word_list[idx] = new_char
+                    word_lower_list[idx] = new_char.lower()
+                    
+            elif aug_type == 'vowel':
+                # Vowel substitution (common mistake)
+                vowels = [i for i, c in enumerate(word_lower_list) if c in 'aeiou']
+                if vowels:
+                    idx = random.choice(vowels)
+                    char = word_lower_list[idx]
+                    if char in VOWEL_SUBS:
+                        new_char = random.choice(VOWEL_SUBS[char])
+                        # Preserve case
+                        if word_list[idx].isupper():
+                            new_char = new_char.upper()
+                        word_list[idx] = new_char
+                        word_lower_list[idx] = new_char
+                        
+            elif aug_type == 'substitute':
+                # Character confusion (less common)
+                idx = random.randint(0, len(word_list) - 1)
+                char = word_lower_list[idx]
+                if char in CHAR_CONFUSIONS:
+                    new_char = random.choice(CHAR_CONFUSIONS[char])
+                    # Preserve case
+                    if word_list[idx].isupper():
+                        new_char = new_char.upper()
+                    word_list[idx] = new_char
+                    word_lower_list[idx] = new_char.lower()
+                    
+            elif aug_type == 'double':
+                # Double character (typing too fast)
+                idx = random.randint(0, len(word_list) - 1)
+                word_list.insert(idx, word_list[idx])
+                word_lower_list.insert(idx, word_lower_list[idx])
         
         result.append(''.join(word_list))
     
