@@ -9,6 +9,7 @@ Usage:
 """
 
 import json
+import os
 import torch
 from pathlib import Path
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
@@ -243,18 +244,30 @@ TEST_SET = [
 
 def load_model(model_path: str):
     """Load model and tokenizer from path."""
-    path = Path(model_path).resolve()
+    # Convert to absolute path for local files
+    model_path = os.path.abspath(model_path)
     
-    tokenizer = AutoTokenizer.from_pretrained(str(path), local_files_only=True)
-    model = AutoModelForSequenceClassification.from_pretrained(str(path), local_files_only=True)
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"Model path does not exist: {model_path}")
+    
+    tokenizer = AutoTokenizer.from_pretrained(model_path, local_files_only=True)
+    model = AutoModelForSequenceClassification.from_pretrained(model_path, local_files_only=True)
     model.eval()
     
     # Load labels
-    label_file = path / "category_mapping.json"
-    if label_file.exists():
+    label_file = os.path.join(model_path, "category_mapping.json")
+    if not os.path.exists(label_file):
+        label_file = os.path.join(model_path, "label_mapping.json")
+    
+    if os.path.exists(label_file):
         with open(label_file) as f:
             labels = json.load(f)
-            idx_to_label = {int(k): v for k, v in labels.get("idx_to_category", {}).items()}
+            if "idx_to_category" in labels:
+                idx_to_label = {int(k): v for k, v in labels["idx_to_category"].items()}
+            elif "idx_to_label" in labels:
+                idx_to_label = {int(k): v for k, v in labels["idx_to_label"].items()}
+            else:
+                idx_to_label = model.config.id2label
     else:
         idx_to_label = model.config.id2label
     
