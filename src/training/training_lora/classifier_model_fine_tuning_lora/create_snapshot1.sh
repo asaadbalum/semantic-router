@@ -9,9 +9,23 @@ echo "Creating snapshot: $SNAPSHOT_DIR"
 # Create snapshot directory
 mkdir -p "$SNAPSHOT_DIR"
 
-# Copy the trained model
+# Copy the trained model (merged Rust-compatible version)
 echo "Copying trained model..."
-cp -r consistency_classifier_bert-base-uncased_r16_rust "$SNAPSHOT_DIR/model"
+if [ -d "consistency_classifier_bert-base-uncased_r16_rust" ]; then
+    cp -r consistency_classifier_bert-base-uncased_r16_rust "$SNAPSHOT_DIR/model"
+    echo "  ✅ Copied merged model"
+else
+    echo "  ⚠️  Model directory not found: consistency_classifier_bert-base-uncased_r16_rust"
+    echo "  Looking for alternative..."
+    # Try to find the model
+    if [ -d "consistency_classifier_bert-base-uncased_r16" ]; then
+        cp -r consistency_classifier_bert-base-uncased_r16 "$SNAPSHOT_DIR/model"
+        echo "  ✅ Copied LoRA adapter model"
+    else
+        echo "  ❌ No model found to snapshot!"
+        exit 1
+    fi
+fi
 
 # Save training parameters and results
 cat > "$SNAPSHOT_DIR/training_info.txt" << EOF
