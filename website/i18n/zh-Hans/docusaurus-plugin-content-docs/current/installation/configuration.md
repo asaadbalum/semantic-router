@@ -3,7 +3,7 @@ sidebar_position: 4
 translation:
   source_commit: "baa07413"
   source_file: "docs/installation/configuration.md"
-  outdated: false
+  outdated: true
 ---
 
 # 配置
