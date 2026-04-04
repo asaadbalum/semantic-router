@@ -3,7 +3,7 @@ sidebar_position: 1
 translation:
   source_commit: "ab2aa160"
   source_file: "docs/intro.md"
-  outdated: false
+  outdated: true
 ---
 
 # vLLM Semantic Router
