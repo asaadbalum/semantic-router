@@ -2,7 +2,7 @@
 translation:
   source_commit: "71b0e522"
   source_file: "docs/overview/signal-driven-decisions.md"
-  outdated: false
+  outdated: true
 sidebar_position: 4
 ---
 
