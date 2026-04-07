@@ -3,7 +3,7 @@ sidebar_position: 2
 translation:
   source_commit: "0ee41b5f"
   source_file: "docs/installation/installation.md"
-  outdated: false
+  outdated: true
 ---
 
 # 快速开始
